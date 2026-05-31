@@ -37,11 +37,17 @@ MAX_JOBS_PER_RUN  = 15     # حداکثر آگهی ارسالی در هر اجر
 
 # ─── کلمات جستجو ──────────────────────────────────────────────────────────────
 SEARCH_QUERIES = [
-    "Junior SEO remote",
-    "Technical SEO remote",
-    "SEO Content Editor remote",
-    "SEO Python remote",
-    "WordPress SEO Specialist remote",
+    "Junior Machine Learning remote",
+    "Junior Data Analyst remote",
+    "Junior Image Processing remote",
+    "Junior Signal Processing remote",
+    "data scientist remote",
+    "data analyst remote", 
+    "Deep Learning Specialist", 
+    "Machine Learning Specialist", 
+    "Data Mining", 
+    "Junior Computer Vision", 
+    "Computer Vision", 
 ]
 
 # ─── کلمات ممنوعه (Blacklist) ──────────────────────────────────────────────────
