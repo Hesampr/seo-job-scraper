@@ -24,30 +24,27 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-RAPIDAPI_KEY       = os.environ["RAPIDAPI_KEY"]
-TELEGRAM_TOKEN     = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
-GSHEET_CREDENTIALS = os.environ.get("GSHEET_CREDENTIALS", "")   # JSON string
+RAPIDAPI_KEY      = os.environ["RAPIDAPI_KEY"]
+TELEGRAM_TOKEN    = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID  = os.environ["TELEGRAM_CHAT_ID"]
+GSHEET_CREDENTIALS = os.environ.get("GSHEET_CREDENTIALS", "")
 GSHEET_ID          = os.environ.get("GSHEET_ID", "")
 GSHEET_SHEET_NAME  = "Jobs"
 
-SEEN_JOBS_FILE    = Path("seen_jobs.txt")
-MAX_SEEN_JOBS     = 2000   # حداکثر تعداد ID ذخیره شده (جلوگیری از بزرگ شدن فایل)
-MAX_JOBS_PER_RUN  = 15     # حداکثر آگهی ارسالی در هر اجرا
+SEEN_JOBS_FILE   = Path("seen_jobs.txt")
+MAX_SEEN_JOBS    = 2000
+MAX_JOBS_PER_RUN = 15
 
 # ─── کلمات جستجو ──────────────────────────────────────────────────────────────
 SEARCH_QUERIES = [
-    "Junior Machine Learning remote",
+    "Junior Machine Learning Engineer remote",
+    "Junior Deep Learning Engineer remote",
+    "Junior Computer Vision Engineer remote",
+    "Junior Data Scientist remote",
     "Junior Data Analyst remote",
-    "Junior Image Processing remote",
-    "Junior Signal Processing remote",
-    "data scientist remote",
-    "data analyst remote", 
-    "Deep Learning Specialist", 
-    "Machine Learning Specialist", 
-    "Data Mining", 
-    "Junior Computer Vision", 
-    "Computer Vision", 
+    "Machine Learning Engineer remote",
+    "Computer Vision Engineer remote",
+    "Medical Image Analysis remote",
 ]
 
 # ─── کلمات ممنوعه (Blacklist) ──────────────────────────────────────────────────
@@ -61,14 +58,144 @@ BLACKLIST_KEYWORDS = [
     "agency",
     "full stack",
     "fullstack",
+    "staff engineer",
+    "principal",
+    "lead",
+    "manager",
+    "head of",
+    " vp ",
+    "vice president",
+    "marketing",
+    " seo ",
+    "seo specialist",
+    "sales",
+    "recruiter",
 ]
+
+# ─── Relevance Scoring ────────────────────────────────────────────────────────
+# Keywords grouped by weight.
+# CORE   (weight 3): direct match to Hesam's primary skills/domains
+# STRONG (weight 2): tools and frameworks he actively uses
+# BROAD  (weight 1): adjacent signals that add context
+#
+# Threshold: a job is dropped if its total score == 0
+# (i.e. not a single keyword from any group appears anywhere in the text)
+
+RELEVANCE_KEYWORDS_CORE = [
+    "machine learning",
+    "deep learning",
+    "computer vision",
+    "neural network",
+    "data scientist",
+    "data analyst",
+    "anomaly detection",
+    "image classification",
+    "object detection",
+    "medical imaging",
+    "neuroimaging",
+    "image segmentation",
+    "image processing",
+]
+
+RELEVANCE_KEYWORDS_STRONG = [
+    "pytorch",
+    "tensorflow",
+    "python",
+    "xgboost",
+    "scikit-learn",
+    "sklearn",
+    "yolo",
+    "u-net",
+    "unet",
+    "efficientnet",
+    "cnn",
+    "convolutional",
+    "transformer",
+    "bert",
+    "llm",
+    "nlp",
+    "pandas",
+    "numpy",
+    "opencv",
+    "dicom",
+    "smote",
+    "feature engineering",
+    "time series",
+    "classification",
+    "regression",
+    "generative",
+    "gan",
+    "diffusion",
+]
+
+RELEVANCE_KEYWORDS_BROAD = [
+    "ai",
+    "artificial intelligence",
+    "research",
+    "ml",
+    "cv",
+    "algorithm",
+    "model training",
+    "inference",
+    "deployment",
+    "data pipeline",
+    "analytics",
+    "statistical",
+    "experiment",
+    "jupyter",
+    "git",
+    "linux",
+    "docker",
+    "aws",
+    "gcp",
+    "azure",
+]
+
+RELEVANCE_THRESHOLD = 0  # drop only if zero — any single match passes
+
+
+def compute_relevance_score(job: dict) -> int:
+    """
+    Score a job against Hesam's profile keywords.
+    Checks: job_title, job_description, employer_name.
+    Returns total weighted score.
+    """
+    title       = (job.get("job_title") or "").lower()
+    description = (job.get("job_description") or "").lower()
+    employer    = (job.get("employer_name") or "").lower()
+    text        = f"{title} {description} {employer}"
+
+    score = 0
+    for kw in RELEVANCE_KEYWORDS_CORE:
+        if kw in text:
+            score += 3
+    for kw in RELEVANCE_KEYWORDS_STRONG:
+        if kw in text:
+            score += 2
+    for kw in RELEVANCE_KEYWORDS_BROAD:
+        if kw in text:
+            score += 1
+    return score
+
+
+def is_relevant(job: dict) -> bool:
+    score = compute_relevance_score(job)
+    if score <= RELEVANCE_THRESHOLD:
+        log.info(
+            f" 🚫 Irrelevant (score={score}) '{job.get('job_title')}' @ '{job.get('employer_name')}'"
+        )
+        return False
+    log.info(
+        f" ✅ Relevant   (score={score}) '{job.get('job_title')}' @ '{job.get('employer_name')}'"
+    )
+    return True
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # حافظه دائمی — seen_jobs.txt
 # ══════════════════════════════════════════════════════════════════════════════
 
 def load_seen_jobs() -> set:
-    """بارگذاری ID های قبلاً ارسال‌شده از فایل کش"""
     if SEEN_JOBS_FILE.exists():
         ids = set(line.strip() for line in SEEN_JOBS_FILE.read_text().splitlines() if line.strip())
         log.info(f"Loaded {len(ids)} seen job IDs from cache")
@@ -78,10 +205,9 @@ def load_seen_jobs() -> set:
 
 
 def save_seen_jobs(seen: set) -> None:
-    """ذخیره ID ها — با محدودیت MAX_SEEN_JOBS برای جلوگیری از بزرگ شدن فایل"""
     ids_list = list(seen)
     if len(ids_list) > MAX_SEEN_JOBS:
-        ids_list = ids_list[-MAX_SEEN_JOBS:]   # فقط جدیدترین‌ها نگه داشته میشه
+        ids_list = ids_list[-MAX_SEEN_JOBS:]
     SEEN_JOBS_FILE.write_text("\n".join(ids_list))
     log.info(f"Saved {len(ids_list)} job IDs to cache")
 
@@ -91,41 +217,34 @@ def save_seen_jobs(seen: set) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def search_jobs(query: str, retries: int = 3) -> list:
-    """جستجو با retry خودکار و مدیریت rate limit"""
     url = "https://jsearch.p.rapidapi.com/search"
     headers = {
-        "x-rapidapi-key":  RAPIDAPI_KEY,
+        "x-rapidapi-key": RAPIDAPI_KEY,
         "x-rapidapi-host": "jsearch.p.rapidapi.com",
     }
     params = {
-        "query":          query,
-        "num_pages":      "1",
-        "date_posted":    "3days",
+        "query": query,
+        "num_pages": "1",
+        "date_posted": "3days",
         "work_from_home": "true",
     }
 
     for attempt in range(1, retries + 1):
         try:
             resp = requests.get(url, headers=headers, params=params, timeout=20)
-
             if resp.status_code == 429:
                 log.warning("Rate limit hit — waiting 60s before retry...")
                 time.sleep(60)
                 continue
-
             if resp.status_code == 403:
                 log.error("API key invalid or not subscribed (403)")
                 return []
-
             resp.raise_for_status()
             data = resp.json()
-
             if data.get("status") != "OK":
                 log.warning(f"API non-OK for '{query}': {data.get('error')}")
                 return []
-
             return data.get("data", [])
-
         except requests.exceptions.Timeout:
             log.warning(f"Timeout on attempt {attempt}/{retries} for '{query}'")
         except requests.exceptions.JSONDecodeError:
@@ -133,7 +252,6 @@ def search_jobs(query: str, retries: int = 3) -> list:
             return []
         except requests.exceptions.RequestException as e:
             log.error(f"Request error (attempt {attempt}/{retries}): {e}")
-
         if attempt < retries:
             wait = 5 * attempt
             log.info(f"Waiting {wait}s before retry...")
@@ -151,10 +269,9 @@ def is_blacklisted(job: dict) -> bool:
     description = (job.get("job_description") or "").lower()
     title       = (job.get("job_title") or "").lower()
     combined    = f"{title} {description}"
-
     for keyword in BLACKLIST_KEYWORDS:
         if keyword.lower() in combined:
-            log.info(f"  ⛔ Blacklisted '{job.get('job_title')}' — matched: '{keyword}'")
+            log.info(f" ⛔ Blacklisted '{job.get('job_title')}' — matched: '{keyword}'")
             return True
     return False
 
@@ -166,9 +283,9 @@ def is_blacklisted(job: dict) -> bool:
 def send_telegram(text: str) -> bool:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
-        "chat_id":                  TELEGRAM_CHAT_ID,
-        "text":                     text,
-        "parse_mode":               "HTML",
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
     try:
@@ -183,19 +300,13 @@ def send_telegram(text: str) -> bool:
 
 
 def extract_salary(job: dict) -> str:
-    """استخراج حقوق از فیلدهای مختلف API"""
-    # اول فیلد آماده رو چک میکنیم
     if job.get("job_salary_string"):
         return job["job_salary_string"]
-
-    # بعد min/max رو بررسی میکنیم
     min_s  = job.get("job_min_salary")
     max_s  = job.get("job_max_salary")
     period = (job.get("job_salary_period") or "").lower()
-
-    period_map = {"year": "/yr", "month": "/mo", "hour": "/hr", "week": "/wk"}
+    period_map   = {"year": "/yr", "month": "/mo", "hour": "/hr", "week": "/wk"}
     period_label = period_map.get(period, f"/{period}" if period else "")
-
     if min_s and max_s:
         return f"${int(min_s):,} – ${int(max_s):,}{period_label}"
     if min_s:
@@ -204,31 +315,28 @@ def extract_salary(job: dict) -> str:
 
 
 def format_job(job: dict) -> str:
-    """ساخت متن پیام تلگرام با html.escape روی تمام متن‌ها"""
-    title    = html.escape(job.get("job_title")    or "بدون عنوان")
-    company  = html.escape(job.get("employer_name") or "نامشخص")
-    city     = html.escape(job.get("job_city")     or "")
-    country  = html.escape(job.get("job_country")  or "")
+    title   = html.escape(job.get("job_title") or "بدون عنوان")
+    company = html.escape(job.get("employer_name") or "نامشخص")
+    city    = html.escape(job.get("job_city") or "")
+    country = html.escape(job.get("job_country") or "")
     location = f"{city}, {country}".strip(", ") or "Remote"
-    source   = html.escape(job.get("job_publisher") or "")
-    link     = job.get("job_apply_link") or job.get("job_google_link") or ""
-    salary   = extract_salary(job)
+    source  = html.escape(job.get("job_publisher") or "")
+    link    = job.get("job_apply_link") or job.get("job_google_link") or ""
+    salary  = extract_salary(job)
+    score   = compute_relevance_score(job)
 
     lines = [
         f"💼 <b>{title}</b>",
         f"🏢 {company}",
         f"📍 {location}",
     ]
-
     if salary:
-        lines.append(f"💰 <b>{html.escape(salary)}</b>")   # برجسته و مجزا
-
+        lines.append(f"💰 <b>{html.escape(salary)}</b>")
     if source:
         lines.append(f"🌐 {source}")
-
+    lines.append(f"⭐ Relevance score: {score}")
     if link:
         lines.append(f'🔗 <a href="{link}">Apply Now</a>')
-
     return "\n".join(lines)
 
 
@@ -245,7 +353,7 @@ def get_sheets_client():
         return None
     try:
         creds_dict = json.loads(GSHEET_CREDENTIALS)
-        scopes     = [
+        scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive",
         ]
@@ -264,11 +372,11 @@ def ensure_sheet_headers(client) -> None:
     if client is None:
         return
     try:
-        sheet = client.open_by_key(GSHEET_ID).worksheet(GSHEET_SHEET_NAME)
+        sheet     = client.open_by_key(GSHEET_ID).worksheet(GSHEET_SHEET_NAME)
         first_row = sheet.row_values(1)
         if not first_row:
             headers = ["Job Title", "Company", "Apply Link", "Posted Date",
-                       "City", "Country", "Salary", "Saved At (UTC)"]
+                       "City", "Country", "Salary", "Relevance Score", "Saved At (UTC)"]
             sheet.insert_row(headers, 1)
             log.info("Sheet headers created")
     except Exception as e:
@@ -279,7 +387,7 @@ def append_to_sheet(client, job: dict) -> None:
     if client is None:
         return
     try:
-        sheet = client.open_by_key(GSHEET_ID).worksheet(GSHEET_SHEET_NAME)
+        sheet  = client.open_by_key(GSHEET_ID).worksheet(GSHEET_SHEET_NAME)
         posted = (job.get("job_posted_at_datetime_utc") or "")[:10]
         row = [
             job.get("job_title", ""),
@@ -289,6 +397,7 @@ def append_to_sheet(client, job: dict) -> None:
             job.get("job_city", ""),
             job.get("job_country", ""),
             extract_salary(job),
+            compute_relevance_score(job),
             datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
         ]
         sheet.append_row(row, value_input_option="USER_ENTERED")
@@ -308,17 +417,17 @@ def main():
     sheets_client = get_sheets_client()
     ensure_sheet_headers(sheets_client)
 
-    new_jobs      = []
-    blacklisted   = 0
-    already_seen  = 0
-    errors        = 0
+    new_jobs     = []
+    blacklisted  = 0
+    irrelevant   = 0
+    already_seen = 0
+    errors       = 0
 
     for query in SEARCH_QUERIES:
         log.info(f"Searching: '{query}'")
         try:
             jobs = search_jobs(query)
-            log.info(f"  → {len(jobs)} raw results")
-
+            log.info(f" → {len(jobs)} raw results")
             for job in jobs:
                 try:
                     job_id = job.get("job_id") or job.get("job_apply_link") or ""
@@ -329,16 +438,20 @@ def main():
                         already_seen += 1
                         continue
 
-                    seen_jobs.add(job_id)   # همیشه ثبت میکنیم، حتی blacklisted ها
+                    seen_jobs.add(job_id)
 
                     if is_blacklisted(job):
                         blacklisted += 1
                         continue
 
+                    if not is_relevant(job):
+                        irrelevant += 1
+                        continue
+
                     new_jobs.append(job)
 
                 except Exception as e:
-                    log.error(f"  Error processing job item: {e}")
+                    log.error(f" Error processing job item: {e}")
                     errors += 1
                     continue
 
@@ -347,10 +460,10 @@ def main():
             errors += 1
             continue
 
-        time.sleep(1.5)   # احترام به rate limit
+        time.sleep(1.5)
 
-    # حذف تکراری‌ها (یه آگهی ممکنه در چند query باشه)
-    dedup_seen = set()
+    # حذف تکراری‌ها
+    dedup_seen  = set()
     unique_jobs = []
     for job in new_jobs:
         jid = job.get("job_id", "")
@@ -358,7 +471,13 @@ def main():
             dedup_seen.add(jid)
             unique_jobs.append(job)
 
-    log.info(f"Summary → new: {len(unique_jobs)} | blacklisted: {blacklisted} | already seen: {already_seen} | errors: {errors}")
+    # Sort by relevance score descending
+    unique_jobs.sort(key=lambda j: compute_relevance_score(j), reverse=True)
+
+    log.info(
+        f"Summary → new: {len(unique_jobs)} | blacklisted: {blacklisted} | "
+        f"irrelevant: {irrelevant} | already seen: {already_seen} | errors: {errors}"
+    )
 
     # ─── ارسال به تلگرام ───────────────────────────────────────────────────
     if not unique_jobs:
@@ -366,16 +485,15 @@ def main():
             f"🔍 <b>گزارش روزانه</b>\n"
             f"📅 {now}\n\n"
             f"✅ آگهی جدیدی امروز پیدا نشد.\n"
-            f"⛔ فیلتر شده: {blacklisted} | 🔁 تکراری: {already_seen}"
+            f"⛔ فیلتر شده: {blacklisted} | 🚫 نامرتبط: {irrelevant} | 🔁 تکراری: {already_seen}"
         )
         save_seen_jobs(seen_jobs)
         return
 
-    # پیام هدر
     send_telegram(
         f"🔍 <b>آگهی‌های شغلی جدید</b>\n"
         f"📅 {now}\n"
-        f"📊 {len(unique_jobs)} آگهی جدید | ⛔ {blacklisted} فیلتر شد\n"
+        f"📊 {len(unique_jobs)} آگهی جدید | ⛔ {blacklisted} فیلتر | 🚫 {irrelevant} نامرتبط\n"
         f"➖➖➖➖➖➖➖➖"
     )
     time.sleep(1)
@@ -387,7 +505,7 @@ def main():
             if send_telegram(msg):
                 sent += 1
                 append_to_sheet(sheets_client, job)
-            time.sleep(0.8)   # جلوگیری از flood limit تلگرام
+            time.sleep(0.8)
         except Exception as e:
             log.error(f"Error sending job to Telegram: {e}")
             continue
